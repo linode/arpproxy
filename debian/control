@@ -1,0 +1,19 @@
+Source: arpproxy
+Section: extra
+Priority: extra
+Maintainer: tpaler <tpaler@linode.com>
+Build-Depends: debhelper (>= 7.0.0~)
+Standards-Version: 3.9.2
+Vcs-Browser: https://bits.linode.com/tpaler/arpproxy
+Vcs-Git: https://bits.linode.com/tpaler/arpproxy.git
+
+Package: arpproxy
+Architecture: amd64
+Depends: 
+Provides: ${diverted-files}
+Conflicts: ${diverted-files}
+Description: arpproxy spoofs macs in arp query for a
+  defined list of ips to extract it from a layer 2
+  domain and route it over a layer 3 network making
+  use of hardware asics without needing many resources
+  itself

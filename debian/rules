@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+	#dh $@ --with=config-package
+
+#override_dh_installsystemd:
+#	dh_installsystemd --no-restart-after-upgrade --no-start
+
+# Prevent dh_installdeb of treating files in /etc as configuration files
+# you need this if need configuration files been always rewritten
+# even if changed
+#override_dh_installdeb:
+#	dh_installdeb
+#	rm -f debian/*/DEBIAN/conffiles

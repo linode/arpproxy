@@ -1,0 +1,13 @@
+[Unit]
+Description=arpproxy
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+#WorkingDirectory=/etc/arpproxy
+EnvironmentFile=-/etc/default/arpproxy
+ExecStart=/usr/sbin/arpproxy $ARPPROXY_OPTS
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
