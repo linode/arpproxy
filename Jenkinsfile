@@ -1,3 +1,3 @@
 library 'ui-builder'
 
-buildGoDeb("arpproxy")
+buildGoDeb("arpproxy", "https://github.com/linode/arpproxy")
