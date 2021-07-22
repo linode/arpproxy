@@ -4,8 +4,8 @@ Priority: extra
 Maintainer: tpaler <tpaler@linode.com>
 Build-Depends: debhelper (>= 7.0.0~)
 Standards-Version: 3.9.2
-Vcs-Browser: https://bits.linode.com/tpaler/arpproxy
-Vcs-Git: https://bits.linode.com/tpaler/arpproxy.git
+Vcs-Browser: https://github.com/linode/arpproxy
+Vcs-Git: https://github.com/linode/arpproxy.git
 
 Package: arpproxy
 Architecture: amd64

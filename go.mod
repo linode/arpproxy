@@ -1,4 +1,4 @@
-module bits.linode.com/tpaler/arpproxy
+module github.com/linode/arpproxy
 
 go 1.16
 
