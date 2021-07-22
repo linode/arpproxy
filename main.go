@@ -22,6 +22,7 @@ func main() {
 	fileFlag := flag.String("f", "/etc/arpproxy.list", "file listing all migrated IPv4")
 	logFlag := flag.String("loglevel", "info", "loglevel")
 	logJson := flag.Bool("logjson", false, "log plain text or json")
+	graceFlag := flag.Duration("grace", 500*time.Millisecond, "wait time for arp reply before spoofing IP")
 
 	flag.Parse()
 
@@ -47,7 +48,7 @@ func main() {
 		})
 	}
 
-	s, err := NewSpoofer(*ifaceFlag, *macFlag)
+	s, err := NewSpoofer(*ifaceFlag, *macFlag, *graceFlag)
 	if err != nil {
 		log.Fatalf("failed to get spoofer: %v", err)
 	}
@@ -85,12 +86,12 @@ func updater(c *Spoofer, filename string, timer time.Duration) {
 			continue
 		}
 
-		log.Infof("Updated list of IPs: %v", *newIps)
-		c.updateIps(newIps)
+		log.Infof("Updated list of static IPs: %v", *newIps)
+		c.SetIPs(newIps)
 	}
 }
 
-func readFile(filename string) (*[]net.IP, error) {
+func readFile(filename string) (*map[string]net.IP, error) {
 	file, err := os.Open(filename)
 	defer file.Close()
 	if err != nil {
@@ -99,7 +100,9 @@ func readFile(filename string) (*[]net.IP, error) {
 
 	scanner := bufio.NewScanner(file)
 	scanner.Split(bufio.ScanLines)
-	var newIps []net.IP
+
+	//var newIps []net.IP
+	newIps := make(map[string]net.IP)
 
 	for scanner.Scan() {
 		s := scanner.Text()
@@ -108,7 +111,7 @@ func readFile(filename string) (*[]net.IP, error) {
 			log.Warnf("could not parse IP %v", s)
 			continue
 		}
-		newIps = append(newIps, ip)
+		newIps[s] = ip
 	}
 
 	return &newIps, nil
