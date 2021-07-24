@@ -22,7 +22,7 @@ func main() {
 	fileFlag := flag.String("f", "/etc/arpproxy.list", "file listing all migrated IPv4")
 	logFlag := flag.String("loglevel", "info", "loglevel")
 	logJson := flag.Bool("logjson", false, "log plain text or json")
-	graceFlag := flag.Duration("grace", 500*time.Millisecond, "wait time for arp reply before spoofing IP")
+	graceFlag := flag.Duration("grace", 500*time.Millisecond, "time to wait for arp reply before considering IP non-local and spoof it. setting this negative will disable auto-detect")
 
 	flag.Parse()
 
