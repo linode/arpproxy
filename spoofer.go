@@ -16,18 +16,21 @@ import (
 // Resolution Protocol, RFC 826).
 const protocolARP = 0x0806
 
+// A Spoofer is an Object containing various needs to send and receive spoofed arp packages
 type Spoofer struct {
 	c       *arp.Client
 	p       *raw.Conn
 	spoofed net.HardwareAddr
 	mine    net.HardwareAddr
-	lock    sync.RWMutex
-	ips     map[string]net.IP
-	qLock   sync.RWMutex
-	qIps    map[string]time.Time
+	sLock   sync.RWMutex
+	sIPs    map[string]struct{}
+	dLock   sync.RWMutex
+	dIPs    map[string]time.Time
 	grace   time.Duration
 }
 
+// NewSpoofer creates a new Spoofer object based on interface name to listen on, Mac Address to use in spoofed replies
+// it also takes a timeDuration option that defines the graceperiod to wait for an arp response to be receive before actively starting to reply with spoofed reponses
 func NewSpoofer(ifName, macS string, grace time.Duration) (*Spoofer, error) {
 	// parse mac
 	mac, err := net.ParseMAC(macS)
@@ -51,20 +54,20 @@ func NewSpoofer(ifName, macS string, grace time.Duration) (*Spoofer, error) {
 		log.Fatalf("couldn't create ARP client: %s", err)
 	}
 
+	ips := make(map[string]struct{})
+	querriedIps := make(map[string]time.Time)
+
 	if grace < 0 {
 		log.Info("auto-detect arp spoofing disabled")
 	}
-
-	ips := make(map[string]net.IP)
-	querriedIps := make(map[string]time.Time)
 
 	return &Spoofer{
 		c:       c,
 		p:       p,
 		spoofed: mac,
 		mine:    ifi.HardwareAddr,
-		ips:     ips,
-		qIps:    querriedIps,
+		sIPs:    ips,
+		dIPs:    querriedIps,
 		grace:   grace,
 	}, nil
 }
@@ -94,7 +97,7 @@ func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 	*/
 
 	// spoofing arps for statically configured IPs
-	if req.Operation == arp.OperationRequest && c.CheckIp(req.TargetIP) {
+	if req.Operation == arp.OperationRequest && c.checkStaticIP(req.TargetIP.String()) {
 		log.Tracef("static  spoofing %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
 		if err := c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP); err != nil {
 			log.Warnf("failed sending arp reply: %s", err)
@@ -113,12 +116,12 @@ func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 func (c *Spoofer) handleArpDynamic(req *arp.Packet, eth *ethernet.Frame) {
 	// if arp reply and remove the IP in question from potential spoofing candidate. if rely shows up clearly its not in a different network
 	if req.Operation == arp.OperationReply {
-		c.DelQIp(req.SenderIP)
+		c.delDynIP(req.SenderIP)
 		return
 	}
 
 	// check for IP in dynamic DB
-	t, exists := c.GetQIp(req.TargetIP)
+	t, exists := c.getDynIP(req.TargetIP)
 
 	// did I recently check this IP already? and if so, how long ago
 	// we may need this to prevent amplification attacks? maybe I'm overthinking...
@@ -126,7 +129,7 @@ func (c *Spoofer) handleArpDynamic(req *arp.Packet, eth *ethernet.Frame) {
 	// if I didn't check for this IP yet at all - or I already heard back from it - check it again
 	if !exists || time.Since(t) > c.grace/2 {
 		if err := c.c.Request(req.TargetIP); err == nil {
-			c.AddQIp(req.TargetIP)
+			c.addDynIP(req.TargetIP)
 		} else {
 			log.Warnf("failed to send arp request for %s, not qualifying for spoofing", req.TargetIP)
 			return
@@ -144,42 +147,43 @@ func (c *Spoofer) handleArpDynamic(req *arp.Packet, eth *ethernet.Frame) {
 	}
 }
 
-func (c *Spoofer) GetQIp(ip net.IP) (time.Time, bool) {
-	c.qLock.RLock()
-	defer c.qLock.RUnlock()
-	t, e := c.qIps[ip.String()]
+func (c *Spoofer) getDynIP(ip net.IP) (time.Time, bool) {
+	c.dLock.RLock()
+	defer c.dLock.RUnlock()
+	t, e := c.dIPs[ip.String()]
 	return t, e
 }
 
-func (c *Spoofer) DelQIp(ip net.IP) {
-	if _, exists := c.GetQIp(ip); exists {
+func (c *Spoofer) delDynIP(ip net.IP) {
+	if _, exists := c.getDynIP(ip); exists {
 		log.Tracef("removing: %s", ip)
-		c.qLock.Lock()
-		delete(c.qIps, ip.String())
-		c.qLock.Unlock()
+		c.dLock.Lock()
+		delete(c.dIPs, ip.String())
+		c.dLock.Unlock()
 	}
 }
 
-func (c *Spoofer) AddQIp(ip net.IP) {
-	if _, exists := c.GetQIp(ip); !exists {
+func (c *Spoofer) addDynIP(ip net.IP) {
+	if _, exists := c.getDynIP(ip); !exists {
 		log.Tracef("tracking: %s", ip)
-		c.qLock.Lock()
-		c.qIps[ip.String()] = time.Now()
-		c.qLock.Unlock()
+		c.dLock.Lock()
+		c.dIPs[ip.String()] = time.Now()
+		c.dLock.Unlock()
 	}
 }
 
-func (c *Spoofer) CheckIp(ip net.IP) bool {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
-	_, exists := c.ips[ip.String()]
+func (c *Spoofer) checkStaticIP(ip string) bool {
+	c.sLock.RLock()
+	defer c.sLock.RUnlock()
+	_, exists := c.sIPs[ip]
 	return exists
 }
 
-func (c *Spoofer) SetIPs(ips *map[string]net.IP) {
-	c.lock.Lock()
-	c.ips = *ips
-	c.lock.Unlock()
+// UpdateStaticIPs updates the list of statically configured IPs to send spoofed ARPs to
+func (c *Spoofer) UpdateStaticIPs(ips *map[string]struct{}) {
+	c.sLock.Lock()
+	c.sIPs = *ips
+	c.sLock.Unlock()
 }
 
 func (c *Spoofer) sendReply(dstMac net.HardwareAddr, dstIP, srcIP net.IP) error {
@@ -210,37 +214,36 @@ func (c *Spoofer) sendReply(dstMac net.HardwareAddr, dstIP, srcIP net.IP) error 
 	return err
 }
 
-func (c *Spoofer) sendGratuitous(timer time.Duration) {
+// HandleGARP handles the constant sending of gratuitous ARPs
+func (c *Spoofer) HandleGARP(timer time.Duration) {
 	for {
 		select {
 		case <-time.After(timer):
 		}
 
-		c.lock.RLock()
-		for _, ip := range c.ips {
-			log.Debugf("gratuitous for static: %s is-at %s", ip, c.spoofed)
-			if err := c.sendReply(ethernet.Broadcast, net.IPv4bcast, ip); err != nil {
-				log.Warnf("Failed sending arp for %s: %s", ip, err)
-			}
+		c.sLock.RLock()
+		log.Debugf("sending static GARP for: %s", c.sIPs)
+		for ip := range c.sIPs {
+			go c.SendGARP(ip)
 		}
-		c.lock.RUnlock()
+		c.sLock.RUnlock()
 
 		if c.grace > 0 {
-			ipsAnnounce := []net.IP{}
-			c.qLock.RLock()
-			for ip, t := range c.qIps {
+			c.dLock.RLock()
+			for ip, t := range c.dIPs {
 				if time.Since(t) > c.grace {
-					ipsAnnounce = append(ipsAnnounce, net.ParseIP(ip))
+					go c.SendGARP(ip)
 				}
 			}
-			c.qLock.RUnlock()
-
-			for _, ip := range ipsAnnounce {
-				log.Debugf("gratuitous for dynamic: %s is-at %s", ip, c.spoofed)
-				if err := c.sendReply(ethernet.Broadcast, net.IPv4bcast, ip); err != nil {
-					log.Warnf("Failed sending arp for %s: %s", ip, err)
-				}
-			}
+			c.dLock.RUnlock()
 		}
+	}
+}
+
+// SendGARP sends a single gratuitous ARP of the IP given
+func (c *Spoofer) SendGARP(ip string) {
+	log.Tracef("gratuitous arp: %s is-at %s", ip, c.spoofed)
+	if err := c.sendReply(ethernet.Broadcast, net.IPv4bcast, net.ParseIP(ip)); err != nil {
+		log.Warnf("Failed sending arp for %s: %s", ip, err)
 	}
 }
