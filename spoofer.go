@@ -2,6 +2,7 @@ package main
 
 import (
 	//"bytes"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -97,27 +98,30 @@ func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 	*/
 
 	// spoofing arps for statically configured IPs
-	if req.Operation == arp.OperationRequest && c.checkStaticIP(req.TargetIP.String()) {
+	if req.Operation == arp.OperationRequest && c.hasStaticIP(req.TargetIP.String()) {
 		log.Tracef("static  spoofing %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
 		if err := c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP); err != nil {
-			log.Warnf("failed sending arp reply: %s", err)
+			log.Warnf("handleArp failed: %s", err)
 		}
 		return
 	}
 
 	// spoofing arps for dynamically learned macs that don't seem to be local (aka, do not answer arps)
 	if c.grace > 0 {
-		c.handleArpDynamic(req, eth)
+		if err := c.handleArpDynamic(req, eth); err != nil {
+			log.Warnf("dynamic ARP failed: %s", err)
+		}
 		return
 	}
-	log.Tracef("not handling arp packet for %v", req.TargetIP)
+
+	log.Tracef("not qualified for spoofing %v", req.TargetIP)
 }
 
-func (c *Spoofer) handleArpDynamic(req *arp.Packet, eth *ethernet.Frame) {
+func (c *Spoofer) handleArpDynamic(req *arp.Packet, eth *ethernet.Frame) error {
 	// if arp reply and remove the IP in question from potential spoofing candidate. if rely shows up clearly its not in a different network
 	if req.Operation == arp.OperationReply {
 		c.delDynIP(req.SenderIP)
-		return
+		return nil
 	}
 
 	// check for IP in dynamic DB
@@ -131,8 +135,7 @@ func (c *Spoofer) handleArpDynamic(req *arp.Packet, eth *ethernet.Frame) {
 		if err := c.c.Request(req.TargetIP); err == nil {
 			c.addDynIP(req.TargetIP)
 		} else {
-			log.Warnf("failed to send arp request for %s, not qualifying for spoofing", req.TargetIP)
-			return
+			return fmt.Errorf("failed sending probing arp to %s: %s.... disqualified for spoofing", req.TargetIP, err)
 		}
 	}
 
@@ -140,11 +143,10 @@ func (c *Spoofer) handleArpDynamic(req *arp.Packet, eth *ethernet.Frame) {
 	// in this case qualifying auto-detected IPs. aka IPs that have not answered my own arps for time of "grace period"
 	if exists && time.Since(t) > c.grace {
 		log.Tracef("dynamic spoofing %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
-		if err := c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP); err != nil {
-			log.Warnf("failed sending arp reply: %s", err)
-		}
-		return
+		return c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP)
 	}
+
+	return nil
 }
 
 func (c *Spoofer) getDynIP(ip net.IP) (time.Time, bool) {
@@ -172,7 +174,7 @@ func (c *Spoofer) addDynIP(ip net.IP) {
 	}
 }
 
-func (c *Spoofer) checkStaticIP(ip string) bool {
+func (c *Spoofer) hasStaticIP(ip string) bool {
 	c.sLock.RLock()
 	defer c.sLock.RUnlock()
 	_, exists := c.sIPs[ip]
@@ -187,15 +189,15 @@ func (c *Spoofer) UpdateStaticIPs(ips *map[string]struct{}) {
 }
 
 func (c *Spoofer) sendReply(dstMac net.HardwareAddr, dstIP, srcIP net.IP) error {
-	log.Debugf("     reply: %s: %s is-at %s", dstIP, srcIP, c.spoofed)
+	log.Debugf("     reply for %15s: %15s is-at %s", dstIP, srcIP, c.spoofed)
 	p, err := arp.NewPacket(arp.OperationReply, c.spoofed, srcIP, dstMac, dstIP)
 	if err != nil {
-		return err
+		return fmt.Errorf("sendReply failed: %w", err)
 	}
 
 	pb, err := p.MarshalBinary()
 	if err != nil {
-		return err
+		return fmt.Errorf("sendReply failed: %w", err)
 	}
 
 	f := &ethernet.Frame{
@@ -207,11 +209,14 @@ func (c *Spoofer) sendReply(dstMac net.HardwareAddr, dstIP, srcIP net.IP) error 
 
 	fb, err := f.MarshalBinary()
 	if err != nil {
-		return err
+		return fmt.Errorf("sendReply failed: %w", err)
 	}
 
 	_, err = c.p.WriteTo(fb, &raw.Addr{HardwareAddr: dstMac})
-	return err
+	if err != nil {
+		return fmt.Errorf("sendReply failed: %w", err)
+	}
+	return nil
 }
 
 // HandleGARP handles the constant sending of gratuitous ARPs
@@ -222,7 +227,6 @@ func (c *Spoofer) HandleGARP(timer time.Duration) {
 		}
 
 		c.sLock.RLock()
-		log.Debugf("sending static GARP for: %s", c.sIPs)
 		for ip := range c.sIPs {
 			go c.SendGARP(ip)
 		}
