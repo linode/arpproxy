@@ -1,7 +1,7 @@
 Source: arpproxy
 Section: extra
 Priority: extra
-Maintainer: tpaler <tpaler@linode.com>
+Maintainer: netops <netops@linode.com>
 Build-Depends: debhelper (>= 7.0.0~)
 Standards-Version: 3.9.2
 Vcs-Browser: https://github.com/linode/arpproxy
