@@ -21,7 +21,8 @@ func main() {
 	macFlag := flag.String("mac", "", "Mac address to spoof in arp reply")
 	fileFlag := flag.String("f", "/etc/arpproxy.list", "file listing all migrated IPv4")
 	logFlag := flag.String("loglevel", "info", "loglevel")
-	logJson := flag.Bool("logjson", false, "log plain text or json")
+	logJSON := flag.Bool("logjson", false, "log plain text or json")
+	graceFlag := flag.Duration("grace", 500*time.Millisecond, "time to wait for arp reply before considering IP non-local and spoof it. setting this negative will disable auto-detect")
 
 	flag.Parse()
 
@@ -37,7 +38,7 @@ func main() {
 		log.SetLevel(log.InfoLevel)
 	}
 
-	if *logJson {
+	if *logJSON {
 		log.SetFormatter(&log.JSONFormatter{})
 	} else {
 		log.SetFormatter(&log.TextFormatter{
@@ -47,7 +48,7 @@ func main() {
 		})
 	}
 
-	s, err := NewSpoofer(*ifaceFlag, *macFlag)
+	s, err := NewSpoofer(*ifaceFlag, *macFlag, *graceFlag)
 	if err != nil {
 		log.Fatalf("failed to get spoofer: %v", err)
 	}
@@ -56,7 +57,7 @@ func main() {
 	go updater(s, *fileFlag, *intFlag)
 
 	// send gratuitous arps
-	go s.sendGratuitous(*intFlag)
+	go s.HandleGARP(*intFlag)
 
 	// read/listen for arps
 	go s.readArp()
@@ -85,12 +86,12 @@ func updater(c *Spoofer, filename string, timer time.Duration) {
 			continue
 		}
 
-		log.Infof("Updated list of IPs: %v", *newIps)
-		c.updateIps(newIps)
+		log.Infof("Updated list of static IPs: %v", *newIps)
+		c.UpdateStaticIPs(newIps)
 	}
 }
 
-func readFile(filename string) (*[]net.IP, error) {
+func readFile(filename string) (*map[string]struct{}, error) {
 	file, err := os.Open(filename)
 	defer file.Close()
 	if err != nil {
@@ -99,7 +100,9 @@ func readFile(filename string) (*[]net.IP, error) {
 
 	scanner := bufio.NewScanner(file)
 	scanner.Split(bufio.ScanLines)
-	var newIps []net.IP
+
+	//var newIps []net.IP
+	newIps := make(map[string]struct{})
 
 	for scanner.Scan() {
 		s := scanner.Text()
@@ -108,7 +111,7 @@ func readFile(filename string) (*[]net.IP, error) {
 			log.Warnf("could not parse IP %v", s)
 			continue
 		}
-		newIps = append(newIps, ip)
+		newIps[s] = struct{}{}
 	}
 
 	return &newIps, nil
