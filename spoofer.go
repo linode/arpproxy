@@ -1,7 +1,7 @@
 package main
 
 import (
-	//"bytes"
+	"bytes"
 	"fmt"
 	"net"
 	"sync"
@@ -89,17 +89,19 @@ func (c *Spoofer) readArp() {
 
 func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 	// Ignore ARP requests which are not broadcast
-	// do I need this? this was part of upstream arpproxy example, but I think I need to skip this since I wanna catch as many arps as possible
-	/*
-		if !bytes.Equal(eth.Destination, ethernet.Broadcast) {
-			log.Tracef("arp request but not broadcast: %s %s %s", req.SenderHardwareAddr, req.SenderIP, req.TargetIP)
-			return
-		}
-	*/
+	// do I need this? this was part of upstream arpproxy example
+	// this would ignore arp requests going to unicast macs, it does however also ignore arp requests to our spoofed mac which most likely won't answer to that arp
+	// eventually the client falls back to broadcasts and traffic should in theory never stop but its not ideal one way or another
+	// this only affects requests made/originated on the local host since unicasts from different hosts wouldn't make it to this host anyway.
+	// soo skipping these really makes more sense and more consistent experience
+	if !bytes.Equal(eth.Destination, ethernet.Broadcast) {
+		log.Tracef("arp request but not broadcast: %s %s %-15s %-15s", req.SenderHardwareAddr, eth.Destination, req.SenderIP, req.TargetIP)
+		return
+	}
 
 	// spoofing arps for statically configured IPs
 	if req.Operation == arp.OperationRequest && c.hasStaticIP(req.TargetIP.String()) {
-		log.Tracef("static  spoofing %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
+		log.Debugf("static  spoofing %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
 		if err := c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP); err != nil {
 			log.Warnf("handleArp failed: %s", err)
 		}
@@ -108,7 +110,7 @@ func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 
 	// spoofing arps for dynamically learned macs that don't seem to be local (aka, do not answer arps)
 	if c.grace > 0 {
-		if err := c.handleArpDynamic(req, eth); err != nil {
+		if err := c.handleArpDynamic(req); err != nil {
 			log.Warnf("dynamic ARP failed: %s", err)
 		}
 		return
@@ -117,7 +119,7 @@ func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 	log.Tracef("not qualified for spoofing %v", req.TargetIP)
 }
 
-func (c *Spoofer) handleArpDynamic(req *arp.Packet, eth *ethernet.Frame) error {
+func (c *Spoofer) handleArpDynamic(req *arp.Packet) error {
 	// if arp reply and remove the IP in question from potential spoofing candidate. if rely shows up clearly its not in a different network
 	if req.Operation == arp.OperationReply {
 		c.delDynIP(req.SenderIP)
@@ -142,7 +144,7 @@ func (c *Spoofer) handleArpDynamic(req *arp.Packet, eth *ethernet.Frame) error {
 	// only proxy ARP requests for IPs we are supposed to handle
 	// in this case qualifying auto-detected IPs. aka IPs that have not answered my own arps for time of "grace period"
 	if exists && time.Since(t) > c.grace {
-		log.Tracef("dynamic spoofing %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
+		log.Debugf("dynamic spoofing %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
 		return c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP)
 	}
 
@@ -189,7 +191,7 @@ func (c *Spoofer) UpdateStaticIPs(ips *map[string]struct{}) {
 }
 
 func (c *Spoofer) sendReply(dstMac net.HardwareAddr, dstIP, srcIP net.IP) error {
-	log.Debugf("     reply for %15s: %15s is-at %s", dstIP, srcIP, c.spoofed)
+	log.Tracef("     reply for %15s: %15s is-at %s", dstIP, srcIP, c.spoofed)
 	p, err := arp.NewPacket(arp.OperationReply, c.spoofed, srcIP, dstMac, dstIP)
 	if err != nil {
 		return fmt.Errorf("sendReply failed: %w", err)
@@ -246,7 +248,7 @@ func (c *Spoofer) HandleGARP(timer time.Duration) {
 
 // SendGARP sends a single gratuitous ARP of the IP given
 func (c *Spoofer) SendGARP(ip string) {
-	log.Tracef("gratuitous arp: %s is-at %s", ip, c.spoofed)
+	log.Debugf("gratuitous arp: %s is-at %s", ip, c.spoofed)
 	if err := c.sendReply(ethernet.Broadcast, net.IPv4bcast, net.ParseIP(ip)); err != nil {
 		log.Warnf("Failed sending arp for %s: %s", ip, err)
 	}

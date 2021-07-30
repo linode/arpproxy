@@ -1,4 +1,6 @@
 # update IFACE and MAC_TO_SPOOF
 # iface is the interface on which the arps are inspected and replied on
-# mac_to_spoof is the mac that will be used in the arp reply *payload*, the actual ethernet frame will be sourced from the IFACE mac
-ARPPROXY_OPTS="-i IFACE -mac MAC_TO_SPOOF"
+# mac_to_spoof is the mac that will be used
+# see --help for more options
+# a negative grace period will disable auto-detect
+ARPPROXY_OPTS="-i IFACE -mac MAC_TO_SPOOF -grace -10m"
