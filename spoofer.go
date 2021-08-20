@@ -61,7 +61,9 @@ func NewSpoofer(ifName, macS string, grace time.Duration, rtLookup bool) (*Spoof
 	ips := make(map[string]struct{})
 	querriedIps := make(map[string]time.Time)
 
-	if grace < 0 {
+	if grace > 0 {
+		log.Info("auto-detect arp spoofing enabled")
+	} else {
 		log.Info("auto-detect arp spoofing disabled")
 	}
 
