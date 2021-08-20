@@ -12,17 +12,37 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+type fileFlag []string
+
+func (f *fileFlag) String() string {
+	s := []string(*f)
+	return fmt.Sprintf("files: %v", s)
+}
+
+func (f *fileFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
 func main() {
 	// intFlag is used to send gratuitous arps at this interval
-	intFlag := flag.Duration("t", 2*time.Minute, "time interval for gratuitous arps for migrated IPs")
+	intFlag := flag.Duration("garp", 2*time.Minute, "time interval for gratuitous arps IPs, negative values disables garps")
+	// intFlag is used to send gratuitous arps at this interval
+	refreshFlag := flag.Duration("refresh", 2*time.Minute, "time interval for refreshing static IP DB file")
 	// ifaceFlag is used to set a network interface for ARP traffic
-	ifaceFlag := flag.String("i", "", "network interface to use for ARP traffic")
-	// ipFlag is used to set an IPv4 address to proxy ARP on behalf of
+	ifaceFlag := flag.String("iface", "", "network interface to use for ARP traffic")
+	// macFlag is used to set the MAC address to proxy ARP on behalf of
 	macFlag := flag.String("mac", "", "Mac address to spoof in arp reply")
-	fileFlag := flag.String("f", "/etc/arpproxy.list", "file listing all migrated IPv4")
+
+	routeFlag := flag.Bool("route", false, "will enable a local route-lookup, if route points to an interface != iface spoofed arp will be sent")
+
+	//fileFlag := flag.String("static", "", "file listing all migrated IPv4")
+	var files fileFlag
+	flag.Var(&files, "file", "file listing all IPv4 to be spoofed. can be used multiple times")
+
 	logFlag := flag.String("loglevel", "info", "loglevel")
 	logJSON := flag.Bool("logjson", false, "log plain text or json")
-	graceFlag := flag.Duration("grace", 500*time.Millisecond, "time to wait for arp reply before considering IP non-local and spoof it. setting this negative will disable auto-detect")
+	graceFlag := flag.Duration("grace", -1*time.Millisecond, "time to wait for arp reply before considering IP non-local and spoof it. a negative value will disable auto-detect")
 
 	flag.Parse()
 
@@ -48,16 +68,20 @@ func main() {
 		})
 	}
 
-	s, err := NewSpoofer(*ifaceFlag, *macFlag, *graceFlag)
+	s, err := NewSpoofer(*ifaceFlag, *macFlag, *graceFlag, *routeFlag)
 	if err != nil {
 		log.Fatalf("failed to get spoofer: %v", err)
 	}
 
 	// update IPs from file at intervals
-	go updater(s, *fileFlag, *intFlag)
+	if len(files) > 0 {
+		go updater(s, &files, *refreshFlag)
+	}
 
 	// send gratuitous arps
-	go s.HandleGARP(*intFlag)
+	if *intFlag > 0 {
+		go s.HandleGARP(*intFlag)
+	}
 
 	// read/listen for arps
 	go s.readArp()
@@ -68,7 +92,7 @@ func main() {
 	os.Exit(1)
 }
 
-func updater(c *Spoofer, filename string, timer time.Duration) {
+func updater(c *Spoofer, filenames *fileFlag, timer time.Duration) {
 	// read file immediately on first run
 	firstRun := make(chan struct{}, 1)
 	firstRun <- struct{}{}
@@ -80,29 +104,29 @@ func updater(c *Spoofer, filename string, timer time.Duration) {
 		case <-firstRun:
 		}
 
-		newIps, err := readFile(filename)
-		if err != nil {
-			log.Warnf("Unable to read file: %v", err)
-			continue
+		newIps := make(map[string]struct{})
+
+		for _, f := range *filenames {
+			if err := readFile(f, newIps); err != nil {
+				log.Warnf("Unable to read file: %v", err)
+				continue
+			}
 		}
 
-		log.Infof("Updated list of static IPs: %v", *newIps)
-		c.UpdateStaticIPs(newIps)
+		log.Infof("Updated list of static IPs: %v", newIps)
+		c.UpdateStaticIPs(&newIps)
 	}
 }
 
-func readFile(filename string) (*map[string]struct{}, error) {
+func readFile(filename string, newIps map[string]struct{}) error {
 	file, err := os.Open(filename)
 	defer file.Close()
 	if err != nil {
-		return nil, fmt.Errorf("failed opening file: %w", err)
+		return fmt.Errorf("failed opening file: %w", err)
 	}
 
 	scanner := bufio.NewScanner(file)
 	scanner.Split(bufio.ScanLines)
-
-	//var newIps []net.IP
-	newIps := make(map[string]struct{})
 
 	for scanner.Scan() {
 		s := scanner.Text()
@@ -114,5 +138,5 @@ func readFile(filename string) (*map[string]struct{}, error) {
 		newIps[s] = struct{}{}
 	}
 
-	return &newIps, nil
+	return nil
 }

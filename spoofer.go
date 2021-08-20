@@ -11,6 +11,8 @@ import (
 	"github.com/mdlayher/ethernet"
 	"github.com/mdlayher/raw"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/vishvananda/netlink"
 )
 
 // protocolARP is the uint16 EtherType representation of ARP (Address
@@ -19,20 +21,21 @@ const protocolARP = 0x0806
 
 // A Spoofer is an Object containing various needs to send and receive spoofed arp packages
 type Spoofer struct {
-	c       *arp.Client
-	p       *raw.Conn
-	spoofed net.HardwareAddr
-	mine    net.HardwareAddr
-	sLock   sync.RWMutex
-	sIPs    map[string]struct{}
-	dLock   sync.RWMutex
-	dIPs    map[string]time.Time
-	grace   time.Duration
+	c        *arp.Client
+	p        *raw.Conn
+	ifi      *net.Interface
+	spoofed  net.HardwareAddr
+	sLock    sync.RWMutex
+	sIPs     map[string]struct{}
+	dLock    sync.RWMutex
+	dIPs     map[string]time.Time
+	grace    time.Duration
+	rtLookup bool
 }
 
 // NewSpoofer creates a new Spoofer object based on interface name to listen on, Mac Address to use in spoofed replies
 // it also takes a timeDuration option that defines the graceperiod to wait for an arp response to be receive before actively starting to reply with spoofed reponses
-func NewSpoofer(ifName, macS string, grace time.Duration) (*Spoofer, error) {
+func NewSpoofer(ifName, macS string, grace time.Duration, rtLookup bool) (*Spoofer, error) {
 	// parse mac
 	mac, err := net.ParseMAC(macS)
 	if err != nil {
@@ -62,14 +65,21 @@ func NewSpoofer(ifName, macS string, grace time.Duration) (*Spoofer, error) {
 		log.Info("auto-detect arp spoofing disabled")
 	}
 
+	if rtLookup {
+		log.Info("route lookups enabled")
+	} else {
+		log.Info("route lookups disabled")
+	}
+
 	return &Spoofer{
-		c:       c,
-		p:       p,
-		spoofed: mac,
-		mine:    ifi.HardwareAddr,
-		sIPs:    ips,
-		dIPs:    querriedIps,
-		grace:   grace,
+		c:        c,
+		p:        p,
+		spoofed:  mac,
+		ifi:      ifi,
+		sIPs:     ips,
+		dIPs:     querriedIps,
+		grace:    grace,
+		rtLookup: rtLookup,
 	}, nil
 }
 
@@ -108,6 +118,13 @@ func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 		return
 	}
 
+	// spoofing arps matching route lookups
+	if c.rtLookup && req.Operation == arp.OperationRequest {
+		if err := c.handleArpRouteLookup(req); err != nil {
+			log.Warnf("routeLookup ARP failed: %s", err)
+		}
+	}
+
 	// spoofing arps for dynamically learned macs that don't seem to be local (aka, do not answer arps)
 	if c.grace > 0 {
 		if err := c.handleArpDynamic(req); err != nil {
@@ -117,6 +134,25 @@ func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 	}
 
 	log.Tracef("not qualified for spoofing %v", req.TargetIP)
+}
+
+func (c *Spoofer) handleArpRouteLookup(req *arp.Packet) error {
+	rts, err := netlink.RouteGet(req.TargetIP)
+	if err != nil {
+		return fmt.Errorf("unable to lookup route: %v", err)
+	}
+
+	log.Tracef("routes matched for %v: %v", req.TargetIP, rts)
+	log.Tracef("my ifi: %v", c.ifi)
+
+	for _, r := range rts {
+		if r.LinkIndex != c.ifi.Index {
+			log.Debugf("route based spoofing %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
+			return c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP)
+		}
+	}
+
+	return nil
 }
 
 func (c *Spoofer) handleArpDynamic(req *arp.Packet) error {
@@ -204,7 +240,7 @@ func (c *Spoofer) sendReply(dstMac net.HardwareAddr, dstIP, srcIP net.IP) error 
 
 	f := &ethernet.Frame{
 		Destination: dstMac,
-		Source:      c.mine,
+		Source:      c.ifi.HardwareAddr,
 		EtherType:   ethernet.EtherTypeARP,
 		Payload:     pb,
 	}
