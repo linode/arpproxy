@@ -3,4 +3,4 @@
 # mac_to_spoof is the mac that will be used
 # see --help for more options
 # a negative grace period will disable auto-detect
-ARPPROXY_OPTS="-i IFACE -mac MAC_TO_SPOOF -grace -10m"
+ARPPROXY_OPTS="-iface IFACE -mac MAC_TO_SPOOF"

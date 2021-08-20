@@ -26,7 +26,7 @@ func (f *fileFlag) Set(value string) error {
 
 func main() {
 	// intFlag is used to send gratuitous arps at this interval
-	intFlag := flag.Duration("garp", 2*time.Minute, "time interval for gratuitous arps IPs, negative values disables garps")
+	intFlag := flag.Duration("garp", 30*time.Second, "time interval for gratuitous arps IPs, negative values disables garps")
 	// intFlag is used to send gratuitous arps at this interval
 	refreshFlag := flag.Duration("refresh", 2*time.Minute, "time interval for refreshing static IP DB file")
 	// ifaceFlag is used to set a network interface for ARP traffic
@@ -34,7 +34,7 @@ func main() {
 	// macFlag is used to set the MAC address to proxy ARP on behalf of
 	macFlag := flag.String("mac", "", "Mac address to spoof in arp reply")
 
-	routeFlag := flag.Bool("route", false, "will enable a local route-lookup, if route points to an interface != iface spoofed arp will be sent")
+	routeFlag := flag.Bool("route", false, "will enable a local route-lookup, if route points to an interface != iface a spoofed arp will be sent")
 
 	//fileFlag := flag.String("static", "", "file listing all migrated IPv4")
 	var files fileFlag

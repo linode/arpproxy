@@ -7,5 +7,5 @@ require (
 	github.com/mdlayher/ethernet v0.0.0-20190606142754-0394541c37b7
 	github.com/mdlayher/raw v0.0.0-20210412142147-51b895745faf
 	github.com/sirupsen/logrus v1.8.1
-	github.com/vishvananda/netlink v1.1.0 // indirect
+	github.com/vishvananda/netlink v1.1.0
 )
