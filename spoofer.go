@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -18,6 +19,8 @@ import (
 // protocolARP is the uint16 EtherType representation of ARP (Address
 // Resolution Protocol, RFC 826).
 const protocolARP = 0x0806
+
+var ArpDisqualified = errors.New("crieria not qualified")
 
 // A Spoofer is an Object containing various needs to send and receive spoofed arp packages
 type Spoofer struct {
@@ -112,33 +115,71 @@ func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 	}
 
 	// spoofing arps for statically configured IPs
-	if req.Operation == arp.OperationRequest && c.hasStaticIP(req.TargetIP.String()) {
-		log.Debugf("static  spoofing %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
-		if err := c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP); err != nil {
-			log.Warnf("handleArp failed: %s", err)
-		}
+	switch err := c.handleStatic(req); err {
+	case nil:
+		// arp was sent everyone happy, stop doing anything else
 		return
-	}
-
-	// spoofing arps matching route lookups
-	if c.rtLookup && req.Operation == arp.OperationRequest {
-		if err := c.handleArpRouteLookup(req); err != nil {
-			log.Warnf("routeLookup ARP failed: %s", err)
-		}
+	case ArpDisqualified:
+		// arp didn't qualify for this method, but no fail per se
+		// moving on to next matching method
+		break
+	default:
+		log.Warnf("dynamic ARP failed: %s", err)
+		return
 	}
 
 	// spoofing arps for dynamically learned macs that don't seem to be local (aka, do not answer arps)
 	if c.grace > 0 {
-		if err := c.handleArpDynamic(req); err != nil {
+		switch err := c.handleArpDynamic(req); err {
+		case nil:
+			// arp was sent everyone happy, stop doing anything else
+			return
+		case ArpDisqualified:
+			// arp didn't qualify for this method, but no fail per se
+			// moving on to next matching method
+			break
+		default:
 			log.Warnf("dynamic ARP failed: %s", err)
+			return
 		}
-		return
+	}
+
+	// spoofing arps matching route lookups (if enabled)
+	if c.rtLookup {
+		switch err := c.handleArpRouteLookup(req); err {
+		case nil:
+			// arp was sent everyone happy, stop doing anything else
+			return
+		case ArpDisqualified:
+			// arp didn't qualify for this method, but no fail per se
+			// moving on to next matching method
+			break
+		default:
+			log.Warnf("routeLookup ARP failed: %s", err)
+			return
+		}
 	}
 
 	log.Tracef("not qualified for spoofing %v", req.TargetIP)
 }
 
+func (c *Spoofer) handleStatic(req *arp.Packet) error {
+	if req.Operation != arp.OperationRequest {
+		return ArpDisqualified
+	}
+	if !c.hasStaticIP(req.TargetIP.String()) {
+		return ArpDisqualified
+	}
+
+	log.Debugf("static spoofing %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
+	return c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP)
+}
+
 func (c *Spoofer) handleArpRouteLookup(req *arp.Packet) error {
+	if req.Operation != arp.OperationRequest {
+		return ArpDisqualified
+	}
+
 	rts, err := netlink.RouteGet(req.TargetIP)
 	if err != nil {
 		return fmt.Errorf("unable to lookup route: %v", err)
@@ -154,14 +195,15 @@ func (c *Spoofer) handleArpRouteLookup(req *arp.Packet) error {
 		}
 	}
 
-	return nil
+	return ArpDisqualified
 }
 
 func (c *Spoofer) handleArpDynamic(req *arp.Packet) error {
-	// if arp reply and remove the IP in question from potential spoofing candidate. if rely shows up clearly its not in a different network
-	if req.Operation == arp.OperationReply {
+	// if arp reply and remove the IP in question from potential spoofing candidate. if a reply shows up clearly its not in a different network
+	// check for sender hw unequal to spoofed will allow us to run 2 arpproxy in parallel without wiping each outs tables
+	if req.Operation == arp.OperationReply && !bytes.Equal(req.SenderHardwareAddr, c.spoofed) {
 		c.delDynIP(req.SenderIP)
-		return nil
+		return ArpDisqualified
 	}
 
 	// check for IP in dynamic DB
@@ -186,7 +228,7 @@ func (c *Spoofer) handleArpDynamic(req *arp.Packet) error {
 		return c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP)
 	}
 
-	return nil
+	return ArpDisqualified
 }
 
 func (c *Spoofer) getDynIP(ip net.IP) (time.Time, bool) {

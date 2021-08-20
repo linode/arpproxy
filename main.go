@@ -26,7 +26,7 @@ func (f *fileFlag) Set(value string) error {
 
 func main() {
 	// intFlag is used to send gratuitous arps at this interval
-	intFlag := flag.Duration("garp", 30*time.Second, "time interval for gratuitous arps IPs, negative values disables garps")
+	intFlag := flag.Duration("garp", 30*time.Second, "time interval for gratuitous arps IPs, negative values disables garps. NOTE: garps only work for statically and dynamically configured IPs")
 	// intFlag is used to send gratuitous arps at this interval
 	refreshFlag := flag.Duration("refresh", 2*time.Minute, "time interval for refreshing static IP DB file")
 	// ifaceFlag is used to set a network interface for ARP traffic
