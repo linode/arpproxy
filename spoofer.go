@@ -34,11 +34,12 @@ type Spoofer struct {
 	dIPs     map[string]time.Time
 	grace    time.Duration
 	rtLookup bool
+	spoofAll bool
 }
 
 // NewSpoofer creates a new Spoofer object based on interface name to listen on, Mac Address to use in spoofed replies
 // it also takes a timeDuration option that defines the graceperiod to wait for an arp response to be receive before actively starting to reply with spoofed reponses
-func NewSpoofer(ifName, macS string, grace time.Duration, rtLookup bool) (*Spoofer, error) {
+func NewSpoofer(ifName, macS string, grace time.Duration, rtLookup, spoofAll bool) (*Spoofer, error) {
 	// parse mac
 	mac, err := net.ParseMAC(macS)
 	if err != nil {
@@ -85,13 +86,11 @@ func NewSpoofer(ifName, macS string, grace time.Duration, rtLookup bool) (*Spoof
 		dIPs:     querriedIps,
 		grace:    grace,
 		rtLookup: rtLookup,
+		spoofAll: spoofAll,
 	}, nil
 }
 
 func (c *Spoofer) readArp() {
-	//func readArp(c *arp.Client, mac, srcMac net.HardwareAddr) {
-	// Handle ARP requests bound for designated IPv4 address, using proxy ARP
-	// to indicate that the address belongs to the mac specified
 	for {
 		pkt, eth, err := c.c.Read()
 		if err != nil {
@@ -104,14 +103,33 @@ func (c *Spoofer) readArp() {
 
 func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 	// Ignore ARP requests which are not broadcast
-	// do I need this? this was part of upstream arpproxy example
-	// this would ignore arp requests going to unicast macs, it does however also ignore arp requests to our spoofed mac which most likely won't answer to that arp
+	// this ignores arp requests going to unicast macs, it does however also ignore unicast arp requests to our spoofed mac which most likely won't answer to that arp
+	// but we won't get that unicast either soooo point in looking at it
 	// eventually the client falls back to broadcasts and traffic should in theory never stop but its not ideal one way or another
 	// this only affects requests made/originated on the local host since unicasts from different hosts wouldn't make it to this host anyway.
 	// soo skipping these really makes more sense and more consistent experience
 	if !bytes.Equal(eth.Destination, ethernet.Broadcast) {
 		log.Tracef("arp request but not broadcast: %s %s %-15s %-15s", req.SenderHardwareAddr, eth.Destination, req.SenderIP, req.TargetIP)
 		return
+	}
+
+	if c.spoofAll {
+		switch err := c.handleAll(req); err {
+		case nil:
+			// arp was sent everyone happy, stop doing anything else
+			return
+		case ArpDisqualified:
+			/*
+				arp didn't qualify for this method, but no fail per se
+				in this case actually not moving on since we try to spoof
+				everything.
+				we use the static IP list actually as an exclusion list
+			*/
+			return
+		default:
+			log.Warnf("spoofAll failed: %s", err)
+			return
+		}
 	}
 
 	// spoofing arps for statically configured IPs
@@ -124,7 +142,7 @@ func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 		// moving on to next matching method
 		break
 	default:
-		log.Warnf("dynamic ARP failed: %s", err)
+		log.Warnf("static ARP failed: %s", err)
 		return
 	}
 
@@ -161,6 +179,19 @@ func (c *Spoofer) handleArp(req *arp.Packet, eth *ethernet.Frame) {
 	}
 
 	log.Tracef("not qualified for spoofing %v", req.TargetIP)
+}
+
+func (c *Spoofer) handleAll(req *arp.Packet) error {
+	if req.Operation != arp.OperationRequest {
+		return ArpDisqualified
+	}
+
+	if c.hasStaticIP(req.SenderIP.String()) {
+		return ArpDisqualified
+	}
+
+	log.Debugf("spoofing (all) %v for %v/%v", req.TargetIP, req.SenderIP, req.SenderHardwareAddr)
+	return c.sendReply(req.SenderHardwareAddr, req.SenderIP, req.TargetIP)
 }
 
 func (c *Spoofer) handleStatic(req *arp.Packet) error {

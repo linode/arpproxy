@@ -35,10 +35,11 @@ func main() {
 	macFlag := flag.String("mac", "", "Mac address to spoof in arp reply")
 
 	routeFlag := flag.Bool("route", false, "will enable a local route-lookup, if route points to an interface != iface a spoofed arp will be sent")
+	allFlag := flag.Bool("spoofAll", false, "spoof all arps you see coming in - use file flag to exclude (you wanna exclude your actual gateway, it needs to arp local ips)")
 
 	//fileFlag := flag.String("static", "", "file listing all migrated IPv4")
 	var files fileFlag
-	flag.Var(&files, "file", "file listing all IPv4 to be spoofed. can be used multiple times")
+	flag.Var(&files, "file", "file listing all IPv4 to be spoofed. can be used multiple times - or if spoofAll is set, a list of IPs to *exclude*")
 
 	logFlag := flag.String("loglevel", "info", "loglevel")
 	logJSON := flag.Bool("logjson", false, "log plain text or json")
@@ -68,7 +69,7 @@ func main() {
 		})
 	}
 
-	s, err := NewSpoofer(*ifaceFlag, *macFlag, *graceFlag, *routeFlag)
+	s, err := NewSpoofer(*ifaceFlag, *macFlag, *graceFlag, *routeFlag, *allFlag)
 	if err != nil {
 		log.Fatalf("failed to get spoofer: %v", err)
 	}
